@@ -46,7 +46,7 @@ This project was built as an experiment in AI-assisted game development, using A
 ### Installation
 
 ```bash
-git clone https://github.com/YOUR_USERNAME/medieval-realm
+git clone https://github.com/yolili5080/medieval-realm
 cd medieval-realm
 npm install
 npm run dev
