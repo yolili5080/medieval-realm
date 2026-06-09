@@ -384,21 +384,13 @@ const DayNightLighting: React.FC<{ tick: number }> = ({ tick }) => {
   return (
     <>
       <ambientLight ref={ambientRef} intensity={0.4} color={0xd4e8ff} />
+      {/* Main sun light - shadows handled by CSM, this is lighting only */}
       <directionalLight
         ref={sunRef}
         position={[60, 80, 40]}
         intensity={2.2}
         color={0xfff8e7}
-        castShadow={true}
-        shadow-mapSize={[2048, 2048]}
-        shadow-camera-near={1}
-        shadow-camera-far={500}
-        shadow-camera-left={-150}
-        shadow-camera-right={150}
-        shadow-camera-top={150}
-        shadow-camera-bottom={-150}
-        shadow-bias={-0.001}
-        shadow-normalBias={0.04}
+        castShadow={false}
       />
       {/* Hemisphere for sky/ground bounce */}
       <hemisphereLight args={[0x87ceeb, 0x8b6914, 0.4]} />

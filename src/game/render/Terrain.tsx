@@ -1,27 +1,38 @@
-import React, { useEffect, useMemo, useRef } from 'react';
-import { useFrame } from '@react-three/fiber';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
+import { useFrame, useThree } from '@react-three/fiber';
 import * as THREE from 'three';
 import { fbm, getTerrainHeight, valueNoise } from '../core/Noise';
 import { gameState } from '../core/GameState';
 
-export const TERRAIN_SIZE = 400;
-const SEGMENTS = 200;
+// Chunk-based terrain constants
+export const CHUNK_SIZE = 64; // Size of each chunk in world units
+const CHUNK_SEGMENTS = 32; // Segments per chunk (lower = better performance)
+const RENDER_DISTANCE = 3; // Render chunks within N chunks of camera (3 = 7x7 grid)
+const UNLOAD_DELAY = 2000; // Keep chunks for 2 seconds before unloading
 
 function slopeAt(normals: THREE.BufferAttribute, i: number): number {
   const ny = normals.getY(i);
   return 1.0 - Math.abs(ny);
 }
 
-function buildTerrainGeometry(): THREE.BufferGeometry {
-  const geo = new THREE.PlaneGeometry(TERRAIN_SIZE, TERRAIN_SIZE, SEGMENTS, SEGMENTS);
+// Build a single terrain chunk at a specific chunk coordinate
+function buildChunkGeometry(chunkX: number, chunkZ: number): THREE.BufferGeometry {
+  const geo = new THREE.PlaneGeometry(CHUNK_SIZE, CHUNK_SIZE, CHUNK_SEGMENTS, CHUNK_SEGMENTS);
   geo.rotateX(-Math.PI / 2);
 
   const positions = geo.attributes.position as THREE.BufferAttribute;
   const count = positions.count;
 
+  // Offset positions to world coordinates
+  const worldOffsetX = chunkX * CHUNK_SIZE;
+  const worldOffsetZ = chunkZ * CHUNK_SIZE;
+
   for (let i = 0; i < count; i++) {
-    const wx = positions.getX(i);
-    const wz = positions.getZ(i);
+    const localX = positions.getX(i);
+    const localZ = positions.getZ(i);
+    const wx = localX + worldOffsetX;
+    const wz = localZ + worldOffsetZ;
+
     const nx = wx / 80;
     const nz = wz / 80;
     const base = fbm(nx, nz, 6, 42);
@@ -44,8 +55,10 @@ function buildTerrainGeometry(): THREE.BufferGeometry {
 
   for (let i = 0; i < count; i++) {
     const height = positions.getY(i);
-    const wx = positions.getX(i);
-    const wz = positions.getZ(i);
+    const localX = positions.getX(i);
+    const localZ = positions.getZ(i);
+    const wx = localX + worldOffsetX;
+    const wz = localZ + worldOffsetZ;
 
     const macro = valueNoise(wx * 0.012, wz * 0.012, 77);
     const micro = valueNoise(wx * 0.22, wz * 0.22, 33) * 0.55
@@ -319,11 +332,48 @@ vec4 diffuseColor = vec4(diffuse * grad, opacity);
   );
 };
 
-const TerrainMesh: React.FC = () => {
-  const geo = useMemo(() => buildTerrainGeometry(), []);
+// Terrain chunk component
+interface TerrainChunkProps {
+  chunkX: number;
+  chunkZ: number;
+  material: THREE.Material;
+}
+
+const TerrainChunk: React.FC<TerrainChunkProps> = React.memo(({ chunkX, chunkZ, material }) => {
+  const geo = useMemo(() => buildChunkGeometry(chunkX, chunkZ), [chunkX, chunkZ]);
+  const worldX = chunkX * CHUNK_SIZE;
+  const worldZ = chunkZ * CHUNK_SIZE;
+
+  useEffect(() => {
+    return () => {
+      geo.dispose();
+    };
+  }, [geo]);
+
+  return (
+    <mesh
+      position={[worldX, 0, worldZ]}
+      geometry={geo}
+      material={material}
+      receiveShadow
+      castShadow
+      frustumCulled={true}
+    />
+  );
+});
+
+TerrainChunk.displayName = 'TerrainChunk';
+
+// Chunk-based terrain manager
+const ChunkedTerrain: React.FC = () => {
+  const { camera } = useThree();
+  const [activeChunks, setActiveChunks] = useState<Set<string>>(new Set());
+  const lastUpdatePos = useRef({ x: 0, z: 0 });
+  const chunkTimeouts = useRef<Map<string, NodeJS.Timeout>>(new Map());
+
   const textures = useMemo(() => createTerrainDetailTextures(), []);
 
-  const mat = useMemo(() => new THREE.MeshStandardMaterial({
+  const material = useMemo(() => new THREE.MeshStandardMaterial({
     vertexColors: true,
     map: textures.albedo,
     roughnessMap: textures.roughness,
@@ -341,9 +391,96 @@ const TerrainMesh: React.FC = () => {
     textures.normal.anisotropy = aniso;
   }, [textures]);
 
+  useEffect(() => {
+    return () => {
+      // Cleanup timeouts on unmount
+      chunkTimeouts.current.forEach((timeout) => clearTimeout(timeout));
+      chunkTimeouts.current.clear();
+    };
+  }, []);
+
+  useFrame(() => {
+    const camX = camera.position.x;
+    const camZ = camera.position.z;
+
+    // Only update chunks if camera moved more than half a chunk
+    const dx = camX - lastUpdatePos.current.x;
+    const dz = camZ - lastUpdatePos.current.z;
+    const distSq = dx * dx + dz * dz;
+    if (distSq < (CHUNK_SIZE * 0.5) ** 2) return;
+
+    lastUpdatePos.current = { x: camX, z: camZ };
+
+    // Calculate camera's chunk position
+    const cameraChunkX = Math.floor(camX / CHUNK_SIZE);
+    const cameraChunkZ = Math.floor(camZ / CHUNK_SIZE);
+
+    const newChunks = new Set<string>();
+
+    // Add chunks within render distance
+    for (let x = cameraChunkX - RENDER_DISTANCE; x <= cameraChunkX + RENDER_DISTANCE; x++) {
+      for (let z = cameraChunkZ - RENDER_DISTANCE; z <= cameraChunkZ + RENDER_DISTANCE; z++) {
+        const key = `${x},${z}`;
+        newChunks.add(key);
+
+        // Cancel unload timeout if chunk is needed again
+        const timeout = chunkTimeouts.current.get(key);
+        if (timeout) {
+          clearTimeout(timeout);
+          chunkTimeouts.current.delete(key);
+        }
+      }
+    }
+
+    // Schedule unload for chunks that are no longer visible
+    activeChunks.forEach((key) => {
+      if (!newChunks.has(key) && !chunkTimeouts.current.has(key)) {
+        const timeout = setTimeout(() => {
+          setActiveChunks((prev) => {
+            const next = new Set(prev);
+            next.delete(key);
+            return next;
+          });
+          chunkTimeouts.current.delete(key);
+        }, UNLOAD_DELAY);
+        chunkTimeouts.current.set(key, timeout);
+      }
+    });
+
+    // Add new chunks
+    setActiveChunks((prev) => {
+      const next = new Set(prev);
+      let changed = false;
+      newChunks.forEach((key) => {
+        if (!next.has(key)) {
+          next.add(key);
+          changed = true;
+        }
+      });
+      return changed ? next : prev;
+    });
+  });
+
+  const chunks = useMemo(() => {
+    return Array.from(activeChunks).map((key) => {
+      const [x, z] = key.split(',').map(Number);
+      return { key, x, z };
+    });
+  }, [activeChunks]);
+
   return (
     <group>
-      <mesh geometry={geo} material={mat} receiveShadow castShadow />
+      {chunks.map(({ key, x, z }) => (
+        <TerrainChunk key={key} chunkX={x} chunkZ={z} material={material} />
+      ))}
+    </group>
+  );
+};
+
+const TerrainMesh: React.FC = () => {
+  return (
+    <group>
+      <ChunkedTerrain />
       <TerrainGrass />
     </group>
   );
