@@ -1,0 +1,19 @@
+{
+  "assets": [
+    {
+      "id": "town_center",
+      "meshLods": [
+        "assets/buildings/town_center_lod0.glb",
+        "assets/buildings/town_center_lod1.glb",
+        "assets/buildings/town_center_lod2.glb"
+      ],
+      "textureSets": {
+        "baseColor": "assets/textures/town_center_basecolor.ktx2",
+        "normal": "assets/textures/town_center_normal.ktx2",
+        "orm": "assets/textures/town_center_orm.ktx2"
+      },
+      "collisionProxy": "box:6x4x6",
+      "instancingGroup": "buildings_core"
+    }
+  ]
+}

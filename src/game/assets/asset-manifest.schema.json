@@ -1,0 +1,36 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "AssetManifest",
+  "type": "object",
+  "required": ["assets"],
+  "properties": {
+    "assets": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["id", "meshLods", "textureSets", "collisionProxy", "instancingGroup"],
+        "properties": {
+          "id": { "type": "string" },
+          "meshLods": {
+            "type": "array",
+            "items": { "type": "string" },
+            "minItems": 1
+          },
+          "textureSets": {
+            "type": "object",
+            "properties": {
+              "baseColor": { "type": "string" },
+              "normal": { "type": "string" },
+              "orm": { "type": "string" },
+              "emissive": { "type": "string" },
+              "height": { "type": "string" }
+            },
+            "required": ["baseColor", "normal", "orm"]
+          },
+          "collisionProxy": { "type": "string" },
+          "instancingGroup": { "type": "string" }
+        }
+      }
+    }
+  }
+}
